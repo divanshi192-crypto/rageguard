@@ -1,7 +1,12 @@
 import Link from "next/link";
 import { BriefcaseBusiness, Code2, Send, Shield } from "lucide-react";
 
-const productLinks = ["Features", "Pricing", "Demo", "How It Works"];
+const productLinks = [
+  { label: "Features", href: "/features" },
+  { label: "Pricing", href: "/pricing" },
+  { label: "Demo", href: "/demo" },
+  { label: "How It Works", href: "/#how-it-works" },
+];
 const companyLinks = ["About", "Blog", "Careers"];
 const legalLinks = ["Privacy Policy", "Terms of Service"];
 
@@ -10,7 +15,7 @@ export default function Footer() {
     <footer className="border-t border-[#E2E8E5] bg-[#F8FAF9]">
       <div className="mx-auto grid w-full max-w-7xl gap-8 px-4 py-12 sm:px-6 md:grid-cols-2 lg:grid-cols-4 lg:px-8">
         <div>
-          <Link href="#" className="flex items-center gap-2">
+          <Link href="/" className="flex items-center gap-2">
             <Shield className="h-5 w-5 text-[#0F6E56]" />
             <span className="font-semibold text-gray-900">ReguGuard</span>
           </Link>
@@ -21,9 +26,9 @@ export default function Footer() {
           <h3 className="text-sm font-semibold text-gray-900">Product</h3>
           <ul className="mt-3 space-y-2">
             {productLinks.map((item) => (
-              <li key={item}>
-                <Link href="#" className="text-sm text-gray-600 transition hover:text-[#0F6E56]">
-                  {item}
+              <li key={item.label}>
+                <Link href={item.href} className="text-sm text-gray-600 transition hover:text-[#0F6E56]">
+                  {item.label}
                 </Link>
               </li>
             ))}
