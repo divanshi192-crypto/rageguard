@@ -58,13 +58,31 @@ app = FastAPI(
 
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[FRONTEND_URL, "http://localhost:3000", "http://localhost:3001"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
+def _cors_allow_origins() -> list[str]:
+    """Comma-separated FRONTEND_URL for production + Vercel preview, plus local dev."""
+    parts = [o.strip() for o in FRONTEND_URL.split(",") if o.strip()]
+    defaults = ["http://localhost:3000", "http://localhost:3001"]
+    seen: set[str] = set()
+    out: list[str] = []
+    for o in parts + defaults:
+        if o not in seen:
+            seen.add(o)
+            out.append(o)
+    return out
+
+
+_cors_regex = os.getenv("CORS_ORIGIN_REGEX", r"https://.*\.vercel\.app").strip()
+_cors_kwargs: dict = {
+    "allow_origins": _cors_allow_origins(),
+    "allow_credentials": True,
+    "allow_methods": ["*"],
+    "allow_headers": ["*"],
+}
+if _cors_regex:
+    _cors_kwargs["allow_origin_regex"] = _cors_regex
+
+app.add_middleware(CORSMiddleware, **_cors_kwargs)
 
 app.include_router(alerts.router, prefix="/api", tags=["Alerts"])
 app.include_router(analyzer.router, prefix="/api", tags=["Analyzer"])

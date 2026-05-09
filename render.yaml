@@ -1,0 +1,26 @@
+# Render Blueprint — deploys the FastAPI backend only.
+# Frontend (Next.js) goes on Vercel. Point NEXT_PUBLIC_API_URL to this service URL.
+#
+# Dashboard: New → Blueprint → connect this repo, or: render blueprint apply
+
+services:
+  - type: web
+    name: reguguard-api
+    runtime: python
+    plan: free
+    region: oregon
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: FRONTEND_URL
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: llama-3.1-8b-instant
+      - key: GROQ_BASE_URL
+        value: https://api.groq.com/openai/v1
+      - key: ANTHROPIC_API_KEY
+        sync: false
