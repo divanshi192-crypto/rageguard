@@ -10,9 +10,23 @@ import {
   Shield,
   UploadCloud,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+import { api, type AnalysisResult, type Alert as ApiAlert } from "@/lib/api";
 
 type ActiveView = "dashboard" | "upload-law" | "my-score";
+
+type DashboardAlert = {
+  id: string;
+  level: string;
+  border: string;
+  badge: string;
+  title: string;
+  deadline: string;
+  deadlineTone: string;
+  actions: string[];
+  source?: string;
+};
 
 const navItems: { id: ActiveView; label: string; icon: typeof LayoutDashboard }[] = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -20,79 +34,162 @@ const navItems: { id: ActiveView; label: string; icon: typeof LayoutDashboard }[
   { id: "my-score", label: "My Score", icon: BarChart3 },
 ];
 
+function mapApiAlertToUi(a: ApiAlert): DashboardAlert {
+  const u = a.urgency.toUpperCase();
+  let level: string;
+  let border: string;
+  let badge: string;
+  let deadlineTone: string;
+  if (u === "HIGH") {
+    level = "HIGH";
+    border = "border-[#A32D2D]";
+    badge = "bg-red-100 text-[#A32D2D]";
+    deadlineTone = "text-[#A32D2D]";
+  } else if (u === "MEDIUM") {
+    level = "MEDIUM";
+    border = "border-[#BA7517]";
+    badge = "bg-amber-100 text-[#BA7517]";
+    deadlineTone = "text-[#BA7517]";
+  } else {
+    level = "INFO";
+    border = "border-gray-300";
+    badge = "bg-gray-200 text-gray-600";
+    deadlineTone = "text-gray-500";
+  }
+  return {
+    id: String(a.id),
+    level,
+    border,
+    badge,
+    title: a.title,
+    deadline: a.deadline ? `Deadline: ${a.deadline}` : "No immediate deadline",
+    deadlineTone,
+    actions: a.actions.length ? a.actions : ["Review this alert with your team."],
+    source: a.source,
+  };
+}
+
+function mapUrgencyBadge(u: string) {
+  const up = u.toUpperCase();
+  if (up === "HIGH") return "bg-red-100 text-[#A32D2D]";
+  if (up === "MEDIUM") return "bg-amber-100 text-[#BA7517]";
+  return "bg-gray-200 text-gray-600";
+}
+
 export default function DemoPage() {
   const [activeView, setActiveView] = useState<ActiveView>("dashboard");
   const [industry, setIndustry] = useState("Coffee Shop");
   const [location, setLocation] = useState("Bangalore, India");
   const [toastMessage, setToastMessage] = useState("");
   const [expandedAlert, setExpandedAlert] = useState<string | null>(null);
-  const [alerts, setAlerts] = useState([
-    {
-      id: "dpdp",
-      level: "HIGH",
-      border: "border-[#A32D2D]",
-      badge: "bg-red-100 text-[#A32D2D]",
-      title: "DPDP Act 2025 - Privacy Policy Update Required",
-      deadline: "Deadline: Sep 1, 2025",
-      deadlineTone: "text-[#A32D2D]",
-      actions: [
-        "Update your public privacy notice with consent language.",
-        "Collect explicit consent before storing customer numbers.",
-        "Assign a person responsible for data access requests.",
-      ],
-    },
-    {
-      id: "gst",
-      level: "MEDIUM",
-      border: "border-[#BA7517]",
-      badge: "bg-amber-100 text-[#BA7517]",
-      title: "GST Filing Rule Change - New Format Required",
-      deadline: "Deadline: Jul 15, 2025",
-      deadlineTone: "text-[#BA7517]",
-      actions: [
-        "Switch your filing sheet to the new GST template.",
-        "Reconcile missing invoice fields in current month data.",
-        "Submit a test filing before final submission date.",
-      ],
-    },
-    {
-      id: "msme",
-      level: "INFO",
-      border: "border-gray-300",
-      badge: "bg-gray-200 text-gray-600",
-      title: "MSME Registration Update 2025",
-      deadline: "No immediate deadline",
-      deadlineTone: "text-gray-500",
-      actions: [
-        "Review current MSME registration profile details.",
-        "Prepare updated ownership and contact details.",
-        "Schedule profile refresh this quarter.",
-      ],
-    },
-  ]);
+  const [alerts, setAlerts] = useState<DashboardAlert[]>([]);
+  const [alertsLoading, setAlertsLoading] = useState(true);
+  const [alertsError, setAlertsError] = useState<string | null>(null);
   const [reviewedCount, setReviewedCount] = useState(0);
+  const [apiOnline, setApiOnline] = useState<boolean | null>(null);
+
   const [isDragActive, setIsDragActive] = useState(false);
   const [fileName, setFileName] = useState("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [showAnalysis, setShowAnalysis] = useState(false);
+  const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [tasks, setTasks] = useState([
-    { id: "privacy", label: "Privacy policy updated", done: true },
-    { id: "contracts", label: "Employee contracts reviewed", done: true },
-    { id: "gst", label: "GST registration current", done: true },
-    { id: "backup", label: "Data backup policy documented", done: false },
-  ]);
+
+  const [tasks, setTasks] = useState<{ id: string; label: string; done: boolean }[]>([]);
+  const [tasksLoading, setTasksLoading] = useState(true);
+  const [tasksError, setTasksError] = useState<string | null>(null);
+  const [scoreTip, setScoreTip] = useState<string | null>(null);
   const [animatedScore, setAnimatedScore] = useState(0);
 
   const score = useMemo(() => {
+    if (!tasks.length) return 0;
     const checkedCount = tasks.filter((task) => task.done).length;
     return Math.round((checkedCount / tasks.length) * 100);
   }, [tasks]);
 
   useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const ok = await api.healthCheck();
+      if (!cancelled) setApiOnline(ok);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     const id = setTimeout(() => setToastMessage(""), 2200);
     return () => clearTimeout(id);
   }, [toastMessage]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setAlertsLoading(true);
+    setAlertsError(null);
+    (async () => {
+      try {
+        const list = await api.getAlerts(industry, location);
+        if (cancelled) return;
+        setAlerts(list.map(mapApiAlertToUi));
+      } catch (e) {
+        if (!cancelled) {
+          setAlertsError(e instanceof Error ? e.message : "Could not load alerts");
+          setAlerts([]);
+        }
+      } finally {
+        if (!cancelled) setAlertsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [industry, location]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setTasksLoading(true);
+    setTasksError(null);
+    (async () => {
+      try {
+        const list = await api.getTasks(industry);
+        if (cancelled) return;
+        setTasks(list.map((t) => ({ id: String(t.id), label: t.task, done: false })));
+      } catch (e) {
+        if (!cancelled) {
+          setTasksError(e instanceof Error ? e.message : "Could not load tasks");
+          setTasks([]);
+        }
+      } finally {
+        if (!cancelled) setTasksLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [industry]);
+
+  useEffect(() => {
+    if (!tasks.length) {
+      setScoreTip(null);
+      return;
+    }
+    let cancelled = false;
+    const completed = tasks.filter((t) => t.done).length;
+    const total = tasks.length;
+    (async () => {
+      try {
+        const res = await api.getScore(completed, total, industry);
+        if (!cancelled) setScoreTip(res.tip);
+      } catch {
+        if (!cancelled) setScoreTip(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [tasks, industry]);
 
   useEffect(() => {
     let frame: number;
@@ -117,25 +214,81 @@ export default function DemoPage() {
     setActiveView("dashboard");
   };
 
-  const triggerAnalysis = (selectedFileName: string) => {
-    setFileName(selectedFileName);
+  const runPdfAnalysis = useCallback(
+    async (file: File) => {
+      setFileName(file.name);
+      setShowAnalysis(false);
+      setAnalysisResult(null);
+      setAnalysisError(null);
+      setIsAnalyzing(true);
+      try {
+        const result = await api.analyzePDF(file, industry, location);
+        setAnalysisResult(result);
+      } catch (e) {
+        setAnalysisError(e instanceof Error ? e.message : "Analysis failed");
+      } finally {
+        setIsAnalyzing(false);
+        setShowAnalysis(true);
+      }
+    },
+    [industry, location],
+  );
+
+  const runSampleAnalysis = useCallback(async () => {
+    setFileName("sample-dpdp-act.pdf");
     setShowAnalysis(false);
+    setAnalysisResult(null);
+    setAnalysisError(null);
     setIsAnalyzing(true);
-    setTimeout(() => {
+    try {
+      const result = await api.analyzeText("sample", industry, location);
+      setAnalysisResult(result);
+    } catch (e) {
+      setAnalysisError(e instanceof Error ? e.message : "Analysis failed");
+    } finally {
       setIsAnalyzing(false);
       setShowAnalysis(true);
-    }, 1500);
-  };
+    }
+  }, [industry, location]);
 
   const handleFileDrop = (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     setIsDragActive(false);
     const dropped = event.dataTransfer.files?.[0];
-    if (dropped) triggerAnalysis(dropped.name);
+    if (dropped?.type === "application/pdf" || dropped.name.toLowerCase().endsWith(".pdf")) {
+      void runPdfAnalysis(dropped);
+    } else if (dropped) {
+      setAnalysisError("Please drop a PDF file.");
+      setShowAnalysis(true);
+    }
+  };
+
+  const mergeAnalysisIntoTasks = () => {
+    if (!analysisResult?.actions.length) return;
+    setTasks((prev) => {
+      const existing = new Set(prev.map((t) => t.label));
+      const toAdd = analysisResult.actions
+        .filter((a) => !existing.has(a))
+        .map((label, i) => ({
+          id: `ai-${Date.now()}-${i}`,
+          label,
+          done: false,
+        }));
+      return [...prev, ...toAdd];
+    });
+    setToastMessage(`${analysisResult.actions.length} tasks added to your score checklist`);
+    setActiveView("my-score");
   };
 
   return (
     <div className="bg-[#F8FAF9]">
+      {apiOnline === false && (
+        <div className="fixed left-0 right-0 top-0 z-50 bg-amber-100 px-4 py-2 text-center text-sm text-amber-900">
+          API not reachable at <code className="rounded bg-amber-200 px-1">localhost:8000</code>. Start
+          the backend, then refresh.
+        </div>
+      )}
+
       <aside className="fixed left-0 top-0 hidden min-h-screen w-64 bg-[#0F6E56] text-white md:block">
         <div className="px-6 pt-6">
           <div className="flex items-center gap-2">
@@ -209,56 +362,73 @@ export default function DemoPage() {
                 {reviewedCount} reviewed
               </span>
             </div>
-            <AnimatePresence mode="popLayout">
-              {alerts.map((alert) => (
-                <motion.div
-                  key={alert.id}
-                  layout
-                  initial={{ opacity: 0, y: 16 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, x: -26 }}
-                  className={`mb-3 rounded-lg border-l-4 ${alert.border} bg-gray-50 p-4`}
-                >
-                  <span className={`rounded px-2 py-0.5 text-xs font-medium ${alert.badge}`}>
-                    {alert.level}
-                  </span>
-                  <p className="mt-2 font-medium text-gray-900">{alert.title}</p>
-                  <p className={`mt-1 text-xs ${alert.deadlineTone}`}>{alert.deadline}</p>
-                  <button
-                    type="button"
-                    className="mt-3 rounded-md bg-white px-3 py-1 text-xs font-medium text-[#0F6E56] ring-1 ring-[#0F6E56]/30 transition hover:bg-[#E1F5EE] focus-visible:ring-2 focus-visible:ring-[#0F6E56]"
-                    onClick={() => setExpandedAlert((prev) => (prev === alert.id ? null : alert.id))}
-                  >
-                    What do I do?
-                  </button>
 
-                  {expandedAlert === alert.id && (
-                    <div className="mt-2 rounded-lg border border-[#9FE1CB] bg-[#E1F5EE] p-4">
-                      <ul className="space-y-2 text-sm text-gray-700">
-                        {alert.actions.map((item) => (
-                          <li key={item} className="flex gap-2">
-                            <span className="mt-1 h-1.5 w-1.5 rounded-full bg-[#0F6E56]" />
-                            <span>{item}</span>
-                          </li>
-                        ))}
-                      </ul>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setAlerts((prev) => prev.filter((entry) => entry.id !== alert.id));
-                          setReviewedCount((prev) => prev + 1);
-                          setExpandedAlert(null);
-                        }}
-                        className="mt-3 rounded-md bg-[#0F6E56] px-3 py-1.5 text-xs font-medium text-white transition hover:opacity-95 focus-visible:ring-2 focus-visible:ring-[#0F6E56]"
-                      >
-                        Mark as reviewed
-                      </button>
-                    </div>
-                  )}
-                </motion.div>
-              ))}
+            {alertsLoading && (
+              <div className="flex items-center gap-2 rounded-lg border border-[#9FE1CB] bg-[#E1F5EE] p-4 text-sm text-[#0F6E56]">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading alerts from API…
+              </div>
+            )}
+            {alertsError && (
+              <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                {alertsError}
+              </div>
+            )}
+
+            <AnimatePresence mode="popLayout">
+              {!alertsLoading &&
+                alerts.map((alert) => (
+                  <motion.div
+                    key={alert.id}
+                    layout
+                    initial={{ opacity: 0, y: 16 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, x: -26 }}
+                    className={`mb-3 rounded-lg border-l-4 ${alert.border} bg-gray-50 p-4`}
+                  >
+                    <span className={`rounded px-2 py-0.5 text-xs font-medium ${alert.badge}`}>
+                      {alert.level}
+                    </span>
+                    <p className="mt-2 font-medium text-gray-900">{alert.title}</p>
+                    {alert.source && (
+                      <p className="mt-1 text-xs text-gray-500">Source: {alert.source}</p>
+                    )}
+                    <p className={`mt-1 text-xs ${alert.deadlineTone}`}>{alert.deadline}</p>
+                    <button
+                      type="button"
+                      className="mt-3 rounded-md bg-white px-3 py-1 text-xs font-medium text-[#0F6E56] ring-1 ring-[#0F6E56]/30 transition hover:bg-[#E1F5EE] focus-visible:ring-2 focus-visible:ring-[#0F6E56]"
+                      onClick={() => setExpandedAlert((prev) => (prev === alert.id ? null : alert.id))}
+                    >
+                      What do I do?
+                    </button>
+
+                    {expandedAlert === alert.id && (
+                      <div className="mt-2 rounded-lg border border-[#9FE1CB] bg-[#E1F5EE] p-4">
+                        <ul className="space-y-2 text-sm text-gray-700">
+                          {alert.actions.map((item) => (
+                            <li key={item} className="flex gap-2">
+                              <span className="mt-1 h-1.5 w-1.5 rounded-full bg-[#0F6E56]" />
+                              <span>{item}</span>
+                            </li>
+                          ))}
+                        </ul>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAlerts((prev) => prev.filter((entry) => entry.id !== alert.id));
+                            setReviewedCount((prev) => prev + 1);
+                            setExpandedAlert(null);
+                          }}
+                          className="mt-3 rounded-md bg-[#0F6E56] px-3 py-1.5 text-xs font-medium text-white transition hover:opacity-95 focus-visible:ring-2 focus-visible:ring-[#0F6E56]"
+                        >
+                          Mark as reviewed
+                        </button>
+                      </div>
+                    )}
+                  </motion.div>
+                ))}
             </AnimatePresence>
-            {alerts.length === 0 && (
+            {!alertsLoading && alerts.length === 0 && !alertsError && (
               <div className="rounded-lg border border-[#9FE1CB] bg-[#E1F5EE] p-4 text-sm text-[#0F6E56]">
                 All current alerts reviewed. Great work.
               </div>
@@ -291,10 +461,10 @@ export default function DemoPage() {
                   ref={fileInputRef}
                   type="file"
                   className="hidden"
-                  accept=".pdf"
+                  accept=".pdf,application/pdf"
                   onChange={(e) => {
                     const file = e.target.files?.[0];
-                    if (file) triggerAnalysis(file.name);
+                    if (file) void runPdfAnalysis(file);
                   }}
                 />
                 <UploadCloud className="mx-auto h-10 w-10 text-gray-300" />
@@ -306,11 +476,7 @@ export default function DemoPage() {
               <button
                 type="button"
                 className="mt-3 text-sm font-medium text-[#0F6E56] hover:underline"
-                onClick={() => {
-                  setFileName("sample-dpdp-act.pdf");
-                  setIsAnalyzing(false);
-                  setShowAnalysis(true);
-                }}
+                onClick={() => void runSampleAnalysis()}
               >
                 Try a sample PDF
               </button>
@@ -318,29 +484,41 @@ export default function DemoPage() {
               {isAnalyzing && (
                 <div className="mt-4 flex items-center gap-2 rounded-lg border border-[#9FE1CB] bg-[#E1F5EE] p-4 text-sm text-[#0F6E56]">
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  AI is analyzing your file...
+                  AI is analyzing your file…
+                </div>
+              )}
+
+              {analysisError && !isAnalyzing && (
+                <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                  {analysisError}
                 </div>
               )}
 
               <AnimatePresence>
-                {showAnalysis && !isAnalyzing && (
+                {showAnalysis && !isAnalyzing && analysisResult && (
                   <motion.div
                     initial={{ opacity: 0, y: 12 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: 8 }}
                     className="mt-4 rounded-xl border border-[#9FE1CB] bg-[#E1F5EE] p-5"
                   >
-                    <p className="mb-3 text-xs font-medium text-[#0F6E56]">
-                      AI Analysis - DPDP Act for {industry}
-                    </p>
+                    <div className="mb-2 flex flex-wrap items-center gap-2">
+                      <span
+                        className={`rounded px-2 py-0.5 text-xs font-medium ${mapUrgencyBadge(analysisResult.urgency)}`}
+                      >
+                        {analysisResult.urgency}
+                      </span>
+                      {analysisResult.deadline && (
+                        <span className="text-xs text-gray-600">Due: {analysisResult.deadline}</span>
+                      )}
+                      <span className="text-xs text-gray-600">Score impact: +{analysisResult.score_impact}</span>
+                    </div>
+                    <p className="mb-3 text-sm text-gray-800">{analysisResult.summary}</p>
+                    <p className="mb-3 text-xs font-medium text-[#0F6E56]">Suggested actions</p>
                     <div className="space-y-3">
-                      {[
-                        "Display a privacy notice at your counter or checkout by Sep 1",
-                        "Stop storing customer phone numbers without written consent",
-                        "Appoint a data officer - this can be yourself, no qualification needed",
-                      ].map((item, index) => (
-                        <div key={item} className="flex gap-2">
-                          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#0F6E56] text-xs text-white">
+                      {analysisResult.actions.map((item, index) => (
+                        <div key={`${item}-${index}`} className="flex gap-2">
+                          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#0F6E56] text-xs text-white">
                             {index + 1}
                           </span>
                           <p className="text-sm text-gray-700">{item}</p>
@@ -349,7 +527,7 @@ export default function DemoPage() {
                     </div>
                     <button
                       type="button"
-                      onClick={() => setToastMessage("3 tasks added to your score checklist")}
+                      onClick={mergeAnalysisIntoTasks}
                       className="mt-4 text-sm font-medium text-[#0F6E56] hover:underline"
                     >
                       Add all to my task list →
@@ -368,9 +546,23 @@ export default function DemoPage() {
               See your live compliance score and complete tasks that raise it fastest.
             </p>
             <div className="mt-6">
+              {tasksLoading && (
+                <div className="mb-4 flex items-center gap-2 text-sm text-[#0F6E56]">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Loading tasks…
+                </div>
+              )}
+              {tasksError && (
+                <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                  {tasksError}
+                </div>
+              )}
               <div className="text-center">
                 <p className={`text-7xl font-bold transition-colors ${scoreColor}`}>{animatedScore}</p>
                 <p className="mt-1 text-gray-500">Future-Proof Score</p>
+                {scoreTip && (
+                  <p className="mx-auto mt-3 max-w-lg text-sm text-[#5F5E5A]">{scoreTip}</p>
+                )}
                 <div className="mt-4 h-3 w-full rounded-full bg-gray-100">
                   <div
                     className="h-3 rounded-full bg-[#1D9E75] transition-all duration-500"
@@ -402,7 +594,7 @@ export default function DemoPage() {
                 ))}
               </div>
 
-              {tasks.every((task) => task.done) && (
+              {tasks.length > 0 && tasks.every((task) => task.done) && (
                 <div className="mt-4 rounded-lg border border-[#9FE1CB] bg-[#E1F5EE] p-3 text-sm font-medium text-[#0F6E56]">
                   You&apos;re fully compliant!
                 </div>

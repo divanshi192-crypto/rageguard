@@ -11,7 +11,7 @@ export function DashboardView() {
       </div>
 
       <div className="mb-3 rounded-lg border-l-4 border-[#A32D2D] bg-gray-50 p-4">
-        <span className="rounded bg-red-100 px-2 py-0.5 text-xs font-medium text-[#A32D2D]">HIGH</span>
+        <span className="rounded bg-red-100 px-2 py-0.5 text-xs font-medium text-[#A32D2D]">NECESSARY</span>
         <p className="mt-2 font-medium text-gray-900">DPDP Act 2025 - Privacy Policy Update Required</p>
         <div className="mt-2 flex items-center gap-2 text-xs text-[#A32D2D]">
           <Calendar className="h-3.5 w-3.5" />
