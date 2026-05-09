@@ -1,3 +1,4 @@
+/** Backend URL: local http://localhost:8000 — production https://reguguard-api.onrender.com (or your Render service URL). */
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 
 export interface Alert {
